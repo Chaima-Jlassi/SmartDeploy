@@ -31,17 +31,40 @@ jobs:
       - name: Run tests
         run: npm test
 
-  docker-build:
-    name: Build Docker image
+  security-and-push:
+    name: Scan and push to ACR
     runs-on: ubuntu-latest
     needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build image
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build Docker image
         run: |
           docker build \
-            -t product-catalog:${{ github.sha }} \
+            -t ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }} \
             ./product-catalog
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL
+          trivyignores: product-catalog/.trivyignore
+
+      - name: Push image to ACR
+        run: |
+          docker push \
+            ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }}
