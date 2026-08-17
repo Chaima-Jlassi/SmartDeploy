@@ -1,0 +1,7 @@
+# CVE-2026-59873 — tar DoS vulnerability in npm's bundled tar module
+# Location: usr/local/lib/node_modules/npm/node_modules/tar
+# This is NOT our application code — it is npm's own internal tooling
+# Our app does not use tar directly or process untrusted archives
+# Waiting for npm to release a version bundling tar >= 7.5.19
+# Accepted risk: low — npm is only used at build time, not in production runtime
+CVE-2026-59873

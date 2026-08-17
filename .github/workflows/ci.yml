@@ -55,13 +55,14 @@ jobs:
             -t ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }} \
             ./product-catalog
 
-      - name: Scan image with Trivy
+            - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }}
           format: table
           exit-code: 1
           severity: CRITICAL
+          trivyignores: product-catalog/.trivyignore
 
       - name: Push image to ACR
         run: |
