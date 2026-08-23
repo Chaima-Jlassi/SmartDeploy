@@ -1,0 +1,25 @@
+namespace: prod
+serviceName: product-catalog
+nodeEnv: production
+
+replicaCount: 2
+
+image:
+  repository: smartdeployacr.azurecr.io/product-catalog
+  tag: latest
+
+service:
+  port: 3000
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+hpa:
+  minReplicas: 2
+  maxReplicas: 5
+  cpuThreshold: 60
