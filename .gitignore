@@ -39,3 +39,4 @@ coverage/
 # Helm
 *.tgz
 charts/
+iac/main.json

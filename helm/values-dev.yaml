@@ -6,7 +6,7 @@ replicaCount: 1
 
 image:
   repository: smartdeployacr.azurecr.io/product-catalog
-  tag: latest
+  tag: "84d76f43b509069e8305d5e452d0d286217b97a6"
 
 service:
   port: 3000

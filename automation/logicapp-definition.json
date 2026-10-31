@@ -2,6 +2,16 @@
   "definition": {
     "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
     "contentVersion": "1.0.0.0",
+    "parameters": {
+      "argocdUrl": {
+        "type": "string",
+        "defaultValue": ""
+      },
+      "argocdToken": {
+        "type": "securestring",
+        "defaultValue": ""
+      }
+    },
     "triggers": {
       "manual": {
         "type": "Request",
@@ -23,9 +33,9 @@
         "type": "Http",
         "inputs": {
           "method": "POST",
-          "uri": "https://20.74.1.110/api/v1/applications/product-catalog-dev/rollback",
+          "uri": "@{concat(parameters('argocdUrl'), '/api/v1/applications/product-catalog-dev/rollback')}",
           "headers": {
-            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhcmdvY2QiLCJzdWIiOiJhZG1pbjpsb2dpbiIsImV4cCI6MTc4ODUxNDg4NywibmJmIjoxNzg4NDI4NDg3LCJpYXQiOjE3ODg0Mjg0ODcsImp0aSI6IjA1MmRkMDAzLTZiZDgtNGU0NC04MDBkLWE5ZWJhN2I1MjI3YyJ9.amAaxfBm6NoVegTpojQoVeW-U692OWvWCQNoyPFlpvY",
+            "Authorization": "@{concat('Bearer ', parameters('argocdToken'))}",
             "Content-Type": "application/json"
           },
           "body": {
@@ -40,9 +50,10 @@
       "Response": {
         "type": "Response",
         "inputs": {
-          "statusCode": 200,
+          "statusCode": "@if(equals(actions('Rollback_via_ArgoCD')['status'], 'Succeeded'), 200, 502)",
           "body": {
-            "message": "Rollback triggered for product-catalog-dev"
+            "rollbackStatus": "@actions('Rollback_via_ArgoCD')['status']",
+            "argocdResponse": "@body('Rollback_via_ArgoCD')"
           }
         },
         "runAfter": {
