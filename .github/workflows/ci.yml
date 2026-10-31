@@ -4,67 +4,219 @@ on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: [dev, staging, main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Test product-catalog
+  test-services:
+    name: Test ${{ matrix.service }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [product-catalog, order-service, notification-service]
     defaults:
       run:
-        working-directory: product-catalog
-
+        working-directory: ${{ matrix.service }}
     steps:
-      - name: Checkout code
+      - name: Check out source
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
-          cache-dependency-path: product-catalog/package-lock.json
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit dependency tree
+        run: npm audit --audit-level=high
+
       - name: Run tests
         run: npm test
 
-  security-and-push:
-    name: Scan and push to ACR
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main')
+      - name: Run lint
+        run: npm run lint
 
+  build-ui:
+    name: Build React dashboard
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Login to Azure
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefix ui
+
+      - name: Build dashboard
+        run: npm --prefix ui run build
+
+  test-gitops-tools:
+    name: Test GitOps tooling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Test image digest tooling
+        run: python -m unittest automation.test_image_digests
+
+  scan-source:
+    name: Scan source, dependencies, secrets, and IaC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
+  lint-helm:
+    name: Lint ${{ matrix.service }} in ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [product-catalog, order-service, notification-service]
+        environment: [dev, staging, prod]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm chart values
+        run: >-
+          helm lint ./helm
+          --values "./helm/values-${{ matrix.service }}-${{ matrix.environment }}.yaml"
+          --set-string image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  validate-infrastructure:
+    name: Validate Bicep templates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Bicep CLI
+        run: az bicep install
+
+      - name: Compile infrastructure templates
+        run: |
+          az bicep build --file iac/main.bicep --outfile "$RUNNER_TEMP/main.json"
+          az bicep build --file automation/logicapp.bicep --outfile "$RUNNER_TEMP/logicapp.json"
+
+  release:
+    name: Scan and publish dev images
+    runs-on: ubuntu-latest
+    needs: [test-services, build-ui, test-gitops-tools, scan-source, lint-helm, validate-infrastructure]
+    if: github.event_name == 'push' && github.ref_name == 'dev' && vars.AZURE_DEPLOY_ENABLED == 'true'
+    environment:
+      name: dev
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      ACR_NAME: smartdeployacr
+      IMAGE_TAG: ${{ github.sha }}
+      GITOPS_ENV: dev
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Log in to Azure
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Login to ACR
-        run: az acr login --name ${{ secrets.ACR_NAME }}
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "$ACR_NAME"
 
-      - name: Build Docker image
+      - name: Build service images
+        shell: bash
         run: |
-          docker build \
-            -t ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }} \
-            ./product-catalog
+          set -euo pipefail
+          for service in product-catalog order-service notification-service; do
+            image="$ACR_NAME.azurecr.io/$service:$IMAGE_TAG"
+            docker build --pull --tag "$image" "./$service"
+          done
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@master
+      - name: Scan Product Catalog image
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }}
+          image-ref: smartdeployacr.azurecr.io/product-catalog:${{ github.sha }}
           format: table
-          exit-code: 1
-          severity: CRITICAL
-          trivyignores: product-catalog/.trivyignore
+          exit-code: "1"
+          severity: HIGH,CRITICAL
 
-      - name: Push image to ACR
+      - name: Scan Order Service image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: smartdeployacr.azurecr.io/order-service:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
+      - name: Scan Notification Service image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: smartdeployacr.azurecr.io/notification-service:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
+      - name: Publish images and update environment digests
+        shell: bash
         run: |
-          docker push \
-            ${{ secrets.ACR_NAME }}.azurecr.io/product-catalog:${{ github.sha }}
+          set -euo pipefail
+          for service in product-catalog order-service notification-service; do
+            image="$ACR_NAME.azurecr.io/$service:$IMAGE_TAG"
+            docker push "$image"
+            digest="$(az acr repository show --name "$ACR_NAME" --image "$service:$IMAGE_TAG" --query digest --output tsv)"
+            python automation/image_digests.py set \
+              --values-file "helm/values-$service-$GITOPS_ENV.yaml" \
+              --digest "$digest"
+          done
+
+      - name: Commit immutable image digests for Argo CD
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- \
+            "helm/values-product-catalog-$GITOPS_ENV.yaml" \
+            "helm/values-order-service-$GITOPS_ENV.yaml" \
+            "helm/values-notification-service-$GITOPS_ENV.yaml"; then
+            echo "No GitOps digest changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "helm/values-product-catalog-$GITOPS_ENV.yaml" \
+            "helm/values-order-service-$GITOPS_ENV.yaml" \
+            "helm/values-notification-service-$GITOPS_ENV.yaml"
+          git commit -m "chore(gitops): update image digests [skip ci]"
+          git push origin "HEAD:$GITHUB_REF_NAME"

@@ -1,0 +1,90 @@
+name: Promote verified images
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: Environment to promote the currently deployed dev image digests into
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote images to ${{ inputs.target_environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.target_environment }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out source with environment history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Copy dev image digests to the target environment
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENVIRONMENT" in
+            staging) target_branch=staging; values_environment=staging ;;
+            production) target_branch=main; values_environment=prod ;;
+            *) echo "Unsupported target environment"; exit 1 ;;
+          esac
+
+          cp automation/image_digests.py "$RUNNER_TEMP/image_digests.py"
+          git fetch origin \
+            "refs/heads/dev:refs/remotes/origin/dev" \
+            "refs/heads/$target_branch:refs/remotes/origin/$target_branch"
+          promotion_branch="promote/$TARGET_ENVIRONMENT"
+          if git ls-remote --exit-code --heads origin "$promotion_branch" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$promotion_branch:refs/remotes/origin/$promotion_branch"
+          fi
+          git checkout -B "$promotion_branch" "origin/$target_branch"
+
+          for service in product-catalog order-service notification-service; do
+            digest="$(python "$RUNNER_TEMP/image_digests.py" read \
+              --service "$service" \
+              --environment dev \
+              --git-ref origin/dev)"
+            python "$RUNNER_TEMP/image_digests.py" set \
+              --values-file "helm/values-$service-$values_environment.yaml" \
+              --digest "$digest"
+          done
+
+          if git diff --quiet -- \
+            "helm/values-product-catalog-$values_environment.yaml" \
+            "helm/values-order-service-$values_environment.yaml" \
+            "helm/values-notification-service-$values_environment.yaml"; then
+            echo "Target environment already uses the verified dev image digests."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "helm/values-product-catalog-$values_environment.yaml" \
+            "helm/values-order-service-$values_environment.yaml" \
+            "helm/values-notification-service-$values_environment.yaml"
+          git commit -m "chore(gitops): promote verified image digests [skip ci]"
+          git push --force-with-lease origin "HEAD:$promotion_branch"
+          open_pr="$(gh pr list --base "$target_branch" --head "$promotion_branch" --json number --jq '.[0].number // empty')"
+          if [[ -z "$open_pr" ]]; then
+            gh pr create \
+              --base "$target_branch" \
+              --head "$promotion_branch" \
+              --title "Promote verified images to $TARGET_ENVIRONMENT" \
+              --body "Promotes the immutable image digests currently deployed in dev. Merge this pull request to let Argo CD deploy them."
+          else
+            echo "Updated existing promotion pull request #$open_pr."
+          fi

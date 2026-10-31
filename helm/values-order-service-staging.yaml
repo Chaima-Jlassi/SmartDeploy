@@ -1,0 +1,20 @@
+namespace: staging
+serviceName: order-service
+nodeEnv: staging
+replicaCount: 1
+image:
+  repository: smartdeployacr.azurecr.io/order-service
+  digest: ""
+service:
+  port: 3000
+resources:
+  requests:
+    cpu: 150m
+    memory: 192Mi
+  limits:
+    cpu: 300m
+    memory: 384Mi
+hpa:
+  minReplicas: 1
+  maxReplicas: 3
+  cpuThreshold: 65

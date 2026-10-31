@@ -19,8 +19,8 @@ spec:
     spec:
       containers:
         - name: {{ .Values.serviceName }}
-          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
-          imagePullPolicy: Always
+          image: {{ printf "%s@%s" .Values.image.repository (required "image.digest must be set by the release workflow" .Values.image.digest) | quote }}
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.service.port }}
           env:
@@ -49,3 +49,12 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
