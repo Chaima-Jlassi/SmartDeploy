@@ -7,11 +7,14 @@ metadata:
     release: monitoring
 spec:
   namespaceSelector:
-    matchNames:
-      - dev
+    matchNames: [dev, staging, prod]
   selector:
-    matchLabels:
-      app: product-catalog
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [product-catalog, order-service, notification-service]
+  targetLabels:
+    - app
   endpoints:
     - port: http
       path: /metrics

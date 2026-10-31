@@ -1,16 +1,12 @@
 namespace: prod
-serviceName: product-catalog
+serviceName: notification-service
 nodeEnv: production
-
 replicaCount: 2
-
 image:
-  repository: smartdeployacr.azurecr.io/product-catalog
-  tag: latest
-
+  repository: smartdeployacr.azurecr.io/notification-service
+  digest: ""
 service:
   port: 3000
-
 resources:
   requests:
     cpu: 200m
@@ -18,7 +14,6 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-
 hpa:
   minReplicas: 2
   maxReplicas: 5

@@ -12,9 +12,22 @@ const httpRequests = new client.Counter({
   registers: [register]
 });
 
+const requestDuration = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'HTTP request duration in seconds',
+  labelNames: ['method', 'route'],
+  registers: [register]
+});
+
 app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
   res.on('finish', () => {
-    httpRequests.inc({ method: req.method, route: req.path, status: res.statusCode });
+    const route = req.route?.path || 'unmatched';
+    httpRequests.inc({ method: req.method, route, status: res.statusCode });
+    requestDuration.observe(
+      { method: req.method, route },
+      Number(process.hrtime.bigint() - startedAt) / 1e9
+    );
   });
   next();
 });
