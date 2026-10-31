@@ -130,7 +130,7 @@ jobs:
     name: Scan and publish dev images
     runs-on: ubuntu-latest
     needs: [test-services, build-ui, test-gitops-tools, scan-source, lint-helm, validate-infrastructure]
-    if: github.event_name == 'push' && github.ref_name == 'dev'
+    if: github.event_name == 'push' && github.ref_name == 'dev' && vars.AZURE_DEPLOY_ENABLED == 'true'
     environment:
       name: dev
     permissions:
