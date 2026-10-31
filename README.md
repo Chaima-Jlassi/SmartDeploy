@@ -36,6 +36,64 @@ npm --prefix order-service test
 npm --prefix notification-service test
 ```
 
+## Test Kubernetes deployment and rollback without Azure
+
+This tests the Helm release and Kubernetes rollout locally. It does not test Azure, ACR, Argo CD, or the GitHub-triggered Logic App workflow. Start Docker Desktop and wait for its engine to be ready; install `k3d`, `kubectl`, and Helm first.
+
+Create a local registry and cluster once:
+
+```powershell
+k3d registry create smartdeploy.localhost --port 5001
+k3d cluster create smartdeploy-local --registry-use k3d-smartdeploy.localhost:5001
+kubectl config use-context k3d-smartdeploy-local
+kubectl get nodes
+```
+
+Build and push a working Product Catalog image, then get its registry digest:
+
+```powershell
+docker build -t localhost:5001/product-catalog:good .\product-catalog
+docker push localhost:5001/product-catalog:good
+
+$headers = @{
+  Accept = "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+}
+$goodDigest = (Invoke-WebRequest "http://localhost:5001/v2/product-catalog/manifests/good" -Headers $headers).Headers["Docker-Content-Digest"]
+if ($goodDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Could not read the local image digest." }
+```
+
+Deploy the working image, then deliberately attempt an upgrade to a valid-shaped but nonexistent digest. The upgrade is expected to fail with an image-pull error:
+
+```powershell
+helm upgrade --install product-catalog .\helm `
+  --namespace dev --create-namespace `
+  --values .\helm\values-product-catalog-dev.yaml `
+  --set-string image.repository=k3d-smartdeploy.localhost:5001/product-catalog `
+  --set-string image.digest=$goodDigest `
+  --wait --timeout 120s
+
+$missingDigest = "sha256:" + ("0" * 64)
+helm upgrade product-catalog .\helm `
+  --namespace dev `
+  --values .\helm\values-product-catalog-dev.yaml `
+  --set-string image.repository=k3d-smartdeploy.localhost:5001/product-catalog `
+  --set-string image.digest=$missingDigest `
+  --wait --timeout 45s
+if ($LASTEXITCODE -eq 0) { throw "The deliberately invalid image digest unexpectedly deployed." }
+```
+
+Roll back to the successful first Helm revision and verify the deployment:
+
+```powershell
+helm history product-catalog --namespace dev
+helm rollback product-catalog 1 --namespace dev --wait --timeout 120s
+kubectl rollout status deployment/product-catalog --namespace dev --timeout=120s
+kubectl get deployment product-catalog --namespace dev `
+  -o jsonpath="{.spec.template.spec.containers[0].image}"
+```
+
+The final image should end in `@$goodDigest`. Check `kubectl config current-context` before running Kubernetes commands so you do not target another cluster.
+
 ## DevSecOps release flow
 
 - Pull requests run the three service test/lint jobs, build the React UI, scan source/dependencies/secrets/IaC with Trivy, and lint all nine service/environment Helm configurations.
