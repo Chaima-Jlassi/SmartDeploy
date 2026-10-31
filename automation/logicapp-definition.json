@@ -3,13 +3,8 @@
     "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
     "contentVersion": "1.0.0.0",
     "parameters": {
-      "argocdUrl": {
-        "type": "string",
-        "defaultValue": ""
-      },
-      "argocdToken": {
-        "type": "securestring",
-        "defaultValue": ""
+      "githubToken": {
+        "type": "securestring"
       }
     },
     "triggers": {
@@ -21,43 +16,129 @@
             "type": "object",
             "properties": {
               "alerts": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "labels": {
+                      "type": "object",
+                      "properties": {
+                        "alertname": { "type": "string" },
+                        "severity": { "type": "string" },
+                        "app": { "type": "string" },
+                        "namespace": { "type": "string" }
+                      }
+                    }
+                  }
+                }
               }
-            }
+            },
+            "required": ["alerts"]
           }
         }
       }
     },
     "actions": {
-      "Rollback_via_ArgoCD": {
-        "type": "Http",
-        "inputs": {
-          "method": "POST",
-          "uri": "@{concat(parameters('argocdUrl'), '/api/v1/applications/product-catalog-dev/rollback')}",
-          "headers": {
-            "Authorization": "@{concat('Bearer ', parameters('argocdToken'))}",
-            "Content-Type": "application/json"
-          },
-          "body": {
-            "id": 0,
-            "dryRun": false,
-            "prune": false
-          },
-          "disableCertificateValidation": true
+      "For_each_alert": {
+        "type": "Foreach",
+        "foreach": "@triggerBody()?['alerts']",
+        "actions": {
+          "Is_valid_critical_service_alert": {
+            "type": "If",
+            "expression": {
+              "and": [
+                { "equals": ["@items('For_each_alert')?['status']", "firing"] },
+                { "equals": ["@items('For_each_alert')?['labels']?['alertname']", "HighErrorRate"] },
+                { "equals": ["@items('For_each_alert')?['labels']?['severity']", "critical"] },
+                {
+                  "or": [
+                    {
+                      "and": [
+                        { "equals": ["@items('For_each_alert')?['labels']?['app']", "product-catalog"] },
+                        {
+                          "or": [
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "dev"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "staging"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "prod"] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "and": [
+                        { "equals": ["@items('For_each_alert')?['labels']?['app']", "order-service"] },
+                        {
+                          "or": [
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "dev"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "staging"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "prod"] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "and": [
+                        { "equals": ["@items('For_each_alert')?['labels']?['app']", "notification-service"] },
+                        {
+                          "or": [
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "dev"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "staging"] },
+                            { "equals": ["@items('For_each_alert')?['labels']?['namespace']", "prod"] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "actions": {
+              "Dispatch_GitOps_rollback": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "https://api.github.com/repos/Chaima-Jlassi/SmartDeploy/dispatches",
+                  "headers": {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": "@{concat('Bearer ', parameters('githubToken'))}",
+                    "Content-Type": "application/json",
+                    "X-GitHub-Api-Version": "2022-11-28"
+                  },
+                  "body": {
+                    "event_type": "smartdeploy_rollback",
+                    "client_payload": {
+                      "service": "@items('For_each_alert')?['labels']?['app']",
+                      "namespace": "@items('For_each_alert')?['labels']?['namespace']",
+                      "alertname": "@items('For_each_alert')?['labels']?['alertname']"
+                    }
+                  },
+                  "retryPolicy": {
+                    "type": "none"
+                  }
+                },
+                "runAfter": {}
+              }
+            },
+            "else": {
+              "actions": {}
+            },
+            "runAfter": {}
+          }
         },
+        "operationOptions": "Sequential",
         "runAfter": {}
       },
       "Response": {
         "type": "Response",
         "inputs": {
-          "statusCode": "@if(equals(actions('Rollback_via_ArgoCD')['status'], 'Succeeded'), 200, 502)",
+          "statusCode": "@if(equals(actions('For_each_alert')?['status'], 'Succeeded'), 202, 502)",
           "body": {
-            "rollbackStatus": "@actions('Rollback_via_ArgoCD')['status']",
-            "argocdResponse": "@body('Rollback_via_ArgoCD')"
+            "status": "Alert batch accepted; only validated firing HighErrorRate alerts are dispatched."
           }
         },
         "runAfter": {
-          "Rollback_via_ArgoCD": ["Succeeded", "Failed"]
+          "For_each_alert": ["Succeeded", "Failed"]
         }
       }
     }

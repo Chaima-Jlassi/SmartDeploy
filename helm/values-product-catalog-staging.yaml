@@ -1,16 +1,12 @@
 namespace: staging
 serviceName: product-catalog
 nodeEnv: staging
-
 replicaCount: 1
-
 image:
   repository: smartdeployacr.azurecr.io/product-catalog
-  tag: latest
-
+  digest: ""
 service:
   port: 3000
-
 resources:
   requests:
     cpu: 150m
@@ -18,7 +14,6 @@ resources:
   limits:
     cpu: 300m
     memory: 384Mi
-
 hpa:
   minReplicas: 1
   maxReplicas: 3

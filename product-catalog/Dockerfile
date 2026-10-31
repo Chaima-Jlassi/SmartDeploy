@@ -12,9 +12,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev && \
-    addgroup -S appgroup && \
-    adduser -S appuser -G appgroup
+    addgroup -S -g 10001 appgroup && \
+    adduser -S -u 10001 -G appgroup appuser
 COPY --from=builder /app/index.js .
-USER appuser
+USER 10001:10001
 EXPOSE 3000
 CMD ["node", "index.js"]

@@ -13,7 +13,6 @@ module aks 'modules/aks.bicep' = {
   params: {
     location: location
     clusterName: aksClusterName
-    acrId: acr.id
   }
 }
 
@@ -22,7 +21,19 @@ module keyVault 'modules/keyvault.bicep' = {
   params: {
     location: location
     keyVaultName: keyVaultName
-    aksKubeletIdentityObjectId: aks.outputs.kubeletIdentityObjectId
+  }
+}
+
+resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, resourceId('Microsoft.ContainerService/managedClusters', aksClusterName), 'acrpull')
+  scope: acr
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+    principalId: aks.outputs.kubeletIdentityObjectId
+    principalType: 'ServicePrincipal'
   }
 }
 

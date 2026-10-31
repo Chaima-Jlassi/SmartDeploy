@@ -1,0 +1,101 @@
+name: GitOps rollback
+
+on:
+  repository_dispatch:
+    types: [smartdeploy_rollback]
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Roll back ${{ github.event.client_payload.service }} in ${{ github.event.client_payload.namespace }}
+    if: contains(fromJSON('["dev", "staging", "prod"]'), github.event.client_payload.namespace)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: rollback-${{ github.event.client_payload.namespace }}-${{ github.event.client_payload.service }}
+      cancel-in-progress: false
+    environment:
+      name: ${{ github.event.client_payload.namespace == 'prod' && 'production' || github.event.client_payload.namespace }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out rollback tooling
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate alert and service
+        env:
+          ALERT_NAME: ${{ github.event.client_payload.alertname }}
+          SERVICE: ${{ github.event.client_payload.service }}
+          NAMESPACE: ${{ github.event.client_payload.namespace }}
+        run: |
+          set -euo pipefail
+          test "$ALERT_NAME" = "HighErrorRate"
+          case "$SERVICE" in
+            product-catalog|order-service|notification-service) ;;
+            *) echo "Unsupported service"; exit 1 ;;
+          esac
+          case "$NAMESPACE" in
+            dev|staging|prod) ;;
+            *) echo "Unsupported namespace"; exit 1 ;;
+          esac
+
+      - name: Restore the previous deployed image digest
+        env:
+          SERVICE: ${{ github.event.client_payload.service }}
+          NAMESPACE: ${{ github.event.client_payload.namespace }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$NAMESPACE" in
+            dev) target_branch=dev ;;
+            staging) target_branch=staging ;;
+            prod) target_branch=main ;;
+          esac
+          values_file="helm/values-$SERVICE-$NAMESPACE.yaml"
+          cp automation/image_digests.py "$RUNNER_TEMP/image_digests.py"
+          git fetch origin "refs/heads/$target_branch:refs/remotes/origin/$target_branch"
+          if [[ "$NAMESPACE" == "dev" ]]; then
+            git checkout -B rollback-target "origin/$target_branch"
+          else
+            rollback_branch="rollback/$SERVICE-$NAMESPACE"
+            if git ls-remote --exit-code --heads origin "$rollback_branch" >/dev/null 2>&1; then
+              git fetch origin "refs/heads/$rollback_branch:refs/remotes/origin/$rollback_branch"
+            fi
+            git checkout -B rollback-target "origin/$target_branch"
+          fi
+          python "$RUNNER_TEMP/image_digests.py" rollback \
+            --service "$SERVICE" \
+            --environment "$NAMESPACE"
+          if git diff --quiet -- "$values_file"; then
+            echo "No new rollback change was needed."
+            if [[ "$NAMESPACE" != "dev" ]]; then
+              open_pr="$(gh pr list --base "$target_branch" --head "rollback/$SERVICE-$NAMESPACE" --json number --jq '.[0].number // empty')"
+              if [[ -n "$open_pr" ]]; then
+                echo "Rollback pull request #$open_pr is already open."
+              fi
+            fi
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$values_file"
+          git commit -m "rollback: restore previous image digest [skip ci]"
+          if [[ "$NAMESPACE" == "dev" ]]; then
+            git push origin "HEAD:$target_branch"
+            exit 0
+          fi
+          git push --force-with-lease origin "HEAD:rollback/$SERVICE-$NAMESPACE"
+          open_pr="$(gh pr list --base "$target_branch" --head "rollback/$SERVICE-$NAMESPACE" --json number --jq '.[0].number // empty')"
+          if [[ -z "$open_pr" ]]; then
+            gh pr create \
+              --base "$target_branch" \
+              --head "rollback/$SERVICE-$NAMESPACE" \
+              --title "Rollback $SERVICE in $NAMESPACE" \
+              --body "Restores the previous image digest after a validated HighErrorRate alert. Review and merge to let Argo CD apply the rollback."
+          else
+            echo "Rollback pull request #$open_pr is already open."
+          fi
