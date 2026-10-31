@@ -81,7 +81,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Scan repository with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -166,7 +166,7 @@ jobs:
           done
 
       - name: Scan Product Catalog image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: smartdeployacr.azurecr.io/product-catalog:${{ github.sha }}
           format: table
@@ -174,7 +174,7 @@ jobs:
           severity: HIGH,CRITICAL
 
       - name: Scan Order Service image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: smartdeployacr.azurecr.io/order-service:${{ github.sha }}
           format: table
@@ -182,7 +182,7 @@ jobs:
           severity: HIGH,CRITICAL
 
       - name: Scan Notification Service image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: smartdeployacr.azurecr.io/notification-service:${{ github.sha }}
           format: table
