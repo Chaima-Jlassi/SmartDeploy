@@ -1,13 +1,13 @@
-# Stage 1 — builder: install ALL deps including devDeps for testing
-FROM node:20-alpine AS builder
+# Stage 1 — builder: install all deps and run tests
+FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm test
 
-# Stage 2 — runtime: only production deps, non-root user
-FROM node:20-alpine AS runtime
+# Stage 2 — runtime: production deps only, non-root user
+FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./

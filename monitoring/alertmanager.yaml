@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: smartdeploy-alerts
+  namespace: monitoring
+  labels:
+    alertmanagerConfig: smartdeploy
+spec:
+  route:
+    receiver: logic-app-rollback
+    groupBy: [alertname, app]
+    groupWait: 30s
+    groupInterval: 2m
+    repeatInterval: 4h
+    matchers:
+      - name: severity
+        value: critical
+  receivers:
+    - name: logic-app-rollback
+      webhookConfigs:
+        - url: "https://prod-04.francecentral.logic.azure.com:443/workflows/07c4e25a93d044ffa14e6cadb62a1458/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=qAACdPr25lxF_AAe7a1_Q8CBIyK8_0hNInA-Ykq8SvU"
+          sendResolved: false
